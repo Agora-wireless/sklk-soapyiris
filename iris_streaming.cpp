@@ -537,7 +537,7 @@ int SoapyIrisLocal::readStream(SoapySDR::Stream *stream, void *const *buffs,
           flags_rx |= SOAPY_SDR_END_BURST;
         } else if ((flags_in & SOAPY_SDR_END_BURST) == SOAPY_SDR_END_BURST) {
           /// We should adjust the timeout to decrement based on how long
-          timeout = 100000;  // 100 ms
+          timeout = std::max(long(100000), timeoutUs);  // 100 ms or longer
         }
       }
     }
@@ -586,12 +586,7 @@ int SoapyIrisLocal::readStream(SoapySDR::Stream *stream, void *const *buffs,
 
   // ended with fragments?
   if (data->readElemsLeft != 0) {
-    if (_tddMode) {
-      data->readElemsLeft = 0;
-      flags |= SOAPY_SDR_MORE_FRAGMENTS;
-    } else {
-      flags |= SOAPY_SDR_MORE_FRAGMENTS;
-    }
+    flags |= SOAPY_SDR_MORE_FRAGMENTS;
   }
   return numRecv;
 }
