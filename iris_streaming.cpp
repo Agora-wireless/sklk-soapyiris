@@ -574,9 +574,7 @@ int SoapyIrisLocal::readStream(SoapySDR::Stream *stream, void *const *buffs,
 
     // Eop if requested 1 packet OR requested end burst and received an end
     // burst
-    eop = (((flags_in & SOAPY_SDR_ONE_PACKET) == SOAPY_SDR_ONE_PACKET) ||
-           (((flags_in & SOAPY_SDR_END_BURST) == SOAPY_SDR_END_BURST) &&
-            ((flags_rx & SOAPY_SDR_END_BURST) == SOAPY_SDR_END_BURST)));
+    eop = (((flags_in & SOAPY_SDR_ONE_PACKET) == SOAPY_SDR_ONE_PACKET) || ((flags_rx & SOAPY_SDR_END_BURST) == SOAPY_SDR_END_BURST));
     flags |= flags_rx;  // total set of any burst or time flags
     if (numRecv == 0) {
       timeNs = timeNs_i;
