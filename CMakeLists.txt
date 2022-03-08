@@ -1,8 +1,8 @@
 ########################################################################
 # Project setup for Iris SoapySDR support on local PC
 ########################################################################
-cmake_minimum_required(VERSION 2.8)
-project(SoapyIris CXX)
+cmake_minimum_required(VERSION 3.1.0)
+project(SoapyIris LANGUAGES CXX)
 
 #select the release build type by default to get optimization flags
 if(NOT CMAKE_BUILD_TYPE)
@@ -41,7 +41,7 @@ add_definitions(-DDRIVER_VERSION=\"${DRIVER_VERSION}\")
 ########################################################################
 # SoapySDR dependency
 ########################################################################
-find_package(SoapySDR "0.6" CONFIG)
+find_package(SoapySDR "0.8.0" CONFIG)
 
 if (NOT SoapySDR_FOUND)
     message(FATAL_ERROR "SoapySDR development files not found")
@@ -81,6 +81,7 @@ SOAPY_SDR_MODULE_UTIL(
         iris_streaming.cpp
         iris_formats.cpp
     LIBRARIES SoapyRemoteLibs
+    VERSION ${DRIVER_VERSION}
 )
 
 #support threaded client code
@@ -92,11 +93,14 @@ endif()
 ########################################################################
 # build tests
 ########################################################################
-add_subdirectory(tests)
+set(BUILD_SOAPYIRIS_TESTS True CACHE STRING "BUILD_SOAPYIRIS_TESTS defaulting to 'True'")
+if(BUILD_SOAPYIRIS_TESTS)
+  message(STATUS "Building SoapyIris Tests")
+  add_subdirectory(tests)
+endif()
 
 ########################################################################
 # Build summary
 ########################################################################
 message(STATUS "${PROJECT_NAME} version: ${DRIVER_VERSION}")
 message(STATUS "Install prefix: ${CMAKE_INSTALL_PREFIX}")
-message(STATUS "Project version: ${DRIVER_VERSION}")
