@@ -152,6 +152,7 @@ struct IrisLocalStream {
   // async activate support
   std::shared_future<int> async;
   bool syncActivate;
+  bool disable_sock_;
 };
 
 /*******************************************************************
@@ -227,11 +228,12 @@ SoapySDR::Stream *SoapyIrisLocal::setupStream(
     streamProt = _remote->readSetting("STREAM_PROTOCOL");
   } catch (...) {
   }
-  if (streamProt != "twbw64")
+  if (streamProt != "twbw64") {
     throw std::runtime_error(
         "Iris::setupStream: Stream protocol mismatch!"
         "Expected protocol twbw64, but firmware supports " +
         streamProt);
+  }
 
   std::unique_ptr<IrisLocalStream> data(new IrisLocalStream);
   std::vector<size_t> channels(_channels);
@@ -322,38 +324,53 @@ SoapySDR::Stream *SoapyIrisLocal::setupStream(
   // true by default, async can be useful, but it might cause a race w/ trigger
   // and activate
   data->syncActivate = true;
-  if (_args.count("SYNC_ACTIVATE") != 0)
+  if (_args.count("SYNC_ACTIVATE") != 0) {
     data->syncActivate = _args.at("SYNC_ACTIVATE") == "true";
-
-  const SoapyURL bindURL("udp", "::", "0");
-  int ret = data->sock.bind(bindURL.toString());
-  if (ret != 0) {
-    throw std::runtime_error("Iris::setupStream: Failed to bind to " +
-                             bindURL.toString() + ": " +
-                             data->sock.lastErrorMsg());
-  }
-  const SoapyURL connectURL("udp", remoteIPv6Addr, remoteServPort);
-  ret = data->sock.connect(connectURL.toString());
-  if (ret != 0) {
-    throw std::runtime_error("Iris::setupStream: Failed to connect to " +
-                             connectURL.toString() + ": " +
-                             data->sock.lastErrorMsg());
   }
 
-  // lookup the local mac address to program the framer
-  SoapyURL localEp(data->sock.getsockname());
+  int ret;
 
   // pass arguments within the args to program the framer
   SoapySDR::Kwargs args(_args);
+  if ((_args.count("iris:ip6_dst") == 0) ||
+      (_args.count("iris:udp_dst") == 0))
+  {
+    data->disable_sock_ = false;
+    const SoapyURL bindURL("udp", "::", "0");
+    ret = data->sock.bind(bindURL.toString());
+    if (ret != 0) {
+      throw std::runtime_error("Iris::setupStream: Failed to bind to " +
+                              bindURL.toString() + ": " +
+                              data->sock.lastErrorMsg());
+    }
+    const SoapyURL connectURL("udp", remoteIPv6Addr, remoteServPort);
+    ret = data->sock.connect(connectURL.toString());
+    if (ret != 0) {
+      throw std::runtime_error("Iris::setupStream: Failed to connect to " +
+                              connectURL.toString() + ": " +
+                              data->sock.lastErrorMsg());
+    }
+
+    // lookup the local mac address to program the framer
+    SoapyURL localEp(data->sock.getsockname());
+
+    args["iris:ip6_dst"] = localEp.getNode();
+    args["iris:udp_dst"] = localEp.getService();
+  } else {
+    data->disable_sock_ = true;
+  }
   args["iris:eth_dst"] = std::to_string(localMac64);
-  args["iris:ip6_dst"] = localEp.getNode();
-  args["iris:udp_dst"] = localEp.getService();
   args["iris:mtu"] = std::to_string(data->mtuElements);
   SoapySDR::logf(
       SOAPY_SDR_INFO,
       "mtu %d bytes -> %d samples X %d channels, %d bytes per element",
       int(mtu), int(data->mtuElements), int(data->numHostChannels),
       int(data->bytesPerElement));
+
+  SoapySDR::logf(
+      SOAPY_SDR_INFO,
+      "eth dest %s -> ip6_dst %s : udp_dst %s local sock? %d",
+      args["iris:eth_dst"].c_str(), args["iris:ip6_dst"].c_str(), args["iris:udp_dst"].c_str(), int(data->disable_sock_));
 
   // is the bypass mode supported for hardware acceleration?
   bool tryBypassMode(false);
@@ -395,8 +412,11 @@ SoapySDR::Stream *SoapyIrisLocal::setupStream(
   // if the rx stream was left running, stop it and drain the fifo
   if (direction == SOAPY_SDR_RX) {
     _remote->deactivateStream(data->remoteStream, 0, 0);
-    while (data->sock.selectRecv(50000)) {
-      data->sock.recv(data->commBuff, kMaxPacketSize);
+    if (data->disable_sock_ == false)
+    {
+      while (data->sock.selectRecv(50000)) {
+        data->sock.recv(data->commBuff, kMaxPacketSize);
+      }
     }
   }
 
@@ -414,33 +434,37 @@ SoapySDR::Stream *SoapyIrisLocal::setupStream(
                      data->routeEndpoints & 0xff, data->routeEndpoints >> 8);
     }
 
-    data->running = true;
-    data->thread = std::thread(&IrisLocalStream::statusLoop, data.get());
-  }
-
-  if (_args.count("SO_PRIORITY")) {
-    ret = data->sock.setPriority(std::stoi(_args.at("SO_PRIORITY")));
-    if (ret == -1) {
-      SoapySDR::logf(SOAPY_SDR_WARNING, "Failed to set socket priority: %s",
-                     data->sock.lastErrorMsg());
+    if (data->disable_sock_ == false) {
+      data->running = true;
+      data->thread = std::thread(&IrisLocalStream::statusLoop, data.get());
     }
   }
 
-  // set tx socket buffer size to match the buffering in the iris
-  // set rx buffering size to be arbitrarily large for socket buffer
-  size_t buffSize =
-      (direction == SOAPY_SDR_RX) ? RX_SOCKET_BUFFER_BYTES : txFifoDepthBytes;
-  ret = data->sock.setBuffSize(direction == SOAPY_SDR_RX, buffSize);
-  if (ret == -1) {
-    SoapySDR::logf(SOAPY_SDR_WARNING,
-                   "Failed to resize socket buffer to %d kib: %s",
-                   buffSize / 1024, data->sock.lastErrorMsg());
-  } else {
-    const size_t actualSize = data->sock.getBuffSize(direction == SOAPY_SDR_RX);
-    if (actualSize < buffSize) {
+  if (data->disable_sock_ == false) {
+    if (_args.count("SO_PRIORITY")) {
+      ret = data->sock.setPriority(std::stoi(_args.at("SO_PRIORITY")));
+      if (ret == -1) {
+        SoapySDR::logf(SOAPY_SDR_WARNING, "Failed to set socket priority: %s",
+                      data->sock.lastErrorMsg());
+      }
+    }
+
+    // set tx socket buffer size to match the buffering in the iris
+    // set rx buffering size to be arbitrarily large for socket buffer
+    size_t buffSize =
+        (direction == SOAPY_SDR_RX) ? RX_SOCKET_BUFFER_BYTES : txFifoDepthBytes;
+    ret = data->sock.setBuffSize(direction == SOAPY_SDR_RX, buffSize);
+    if (ret == -1) {
       SoapySDR::logf(SOAPY_SDR_WARNING,
-                     "Failed to resize socket buffer to %d kib, actual %d kib",
-                     buffSize / 1024, actualSize / 1024);
+                    "Failed to resize socket buffer to %d kib: %s",
+                    buffSize / 1024, data->sock.lastErrorMsg());
+    } else {
+      const size_t actualSize = data->sock.getBuffSize(direction == SOAPY_SDR_RX);
+      if (actualSize < buffSize) {
+        SoapySDR::logf(SOAPY_SDR_WARNING,
+                      "Failed to resize socket buffer to %d kib, actual %d kib",
+                      buffSize / 1024, actualSize / 1024);
+      }
     }
   }
   return (SoapySDR::Stream *)data.release();
@@ -453,7 +477,9 @@ void SoapyIrisLocal::closeStream(SoapySDR::Stream *stream) {
     data->thread.join();
   }
   _remote->closeStream(data->remoteStream);
-  data->sock.close();
+  if (data->disable_sock_ == false) {
+    data->sock.close();
+  }
   delete data;
 }
 
@@ -494,6 +520,10 @@ int SoapyIrisLocal::readStream(SoapySDR::Stream *stream, void *const *buffs,
   bool eop = false;
   const int flags_in = flags;
   flags = 0;  // clear
+
+  if (data->disable_sock_) {
+    return SOAPY_SDR_NOT_SUPPORTED;
+  }
 
   size_t timeout = timeoutUs;
   size_t numRecv = 0;
@@ -595,6 +625,9 @@ int SoapyIrisLocal::writeStream(SoapySDR::Stream *stream,
                                 int &flags, const long long timeNs,
                                 const long timeoutUs) {
   auto data = reinterpret_cast<IrisLocalStream *>(stream);
+  if (data->disable_sock_) {
+    return SOAPY_SDR_NOT_SUPPORTED;
+  }
 
   const bool onePkt = (flags & SOAPY_SDR_ONE_PACKET) != 0;
 
@@ -644,7 +677,7 @@ int SoapyIrisLocal::writeStream(SoapySDR::Stream *stream,
 void IrisLocalStream::statusLoop(void) {
   THREAD_PRIO(0.7);
   while (running) {
-    if (not this->sock.selectRecv(100000)) {
+    if (sock.selectRecv(100000) == false) {
       continue;
     }
 
