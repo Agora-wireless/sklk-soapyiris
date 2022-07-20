@@ -91,6 +91,7 @@ SoapySDR::Kwargs SoapyIrisLocal::getHardwareInfo(void) const
 {
     auto info = _remote->getHardwareInfo();
     info["driver"] = DRIVER_VERSION;
+    info["ip_address"] = _remoteURL;
     return info;
 }
 

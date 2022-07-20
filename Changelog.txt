@@ -1,9 +1,11 @@
 This this the changelog file for the SoapyIris project.
 
-Release 1999.12.9.9 (Badness!)
+Release 2022.7.0.1 (2022-07-20)
 ==========================
 
-- Do not use
+- Added ip address output
+- Added log messages
+- Modified the end burst detection
 
 
 Release 2020.02.0.1 (2020-02-10)

@@ -492,6 +492,12 @@ int SoapyIrisLocal::activateStream(SoapySDR::Stream *stream, const int flags,
                                    const long long timeNs,
                                    const size_t numElems) {
   auto data = reinterpret_cast<IrisLocalStream *>(stream);
+
+  for (const auto& info : _remote->getSettingInfo()) {
+    SoapySDR::logf(SOAPY_SDR_TRACE,
+                  "Remote settings: %s", info.key.c_str());
+  }
+
   if (data->syncActivate) {
     return _remote->activateStream(data->remoteStream, flags, timeNs, numElems);
   }
@@ -861,25 +867,37 @@ int SoapyIrisLocal::acquireReadBuffer(SoapySDR::Stream *stream, size_t &handle,
               << "===========================================" << std::endl;
   }
 
+  SoapySDR::logf(SOAPY_SDR_TRACE,
+                "Pkt Rx. IsBurst %d, Burst Count %d, Rx Samples %d", isBurst, burstCount, numSamps);
+
   // or end of burst but not totally full due to packing
   bool burstEnd = false;
   if (isBurst && (burstCount <= numSamps) &&
       (((numSamps - burstCount) * data->bytesPerElement) < sizeof(uint64_t))) {
+    SoapySDR::logf(SOAPY_SDR_TRACE,
+                  "Burst end detected. IsBurst %d, Burst Count %d, Rx Samples %d", isBurst, burstCount, numSamps);
     numSamps = burstCount;
     burstEnd = true;
+  }
+
+  //End Burst Tracking for Tdd Mode
+  //Won't work when samples in a symbol end on the udp pkt boundary
+  if (_tddMode && (numSamps < burstCount)) {
+    burstEnd = true;
+    SoapySDR::logf(SOAPY_SDR_TRACE,
+                   "Burst end detected. Burst Count %d, Rx Samples %d", burstCount, numSamps);
   }
 
   flags = 0;
   ret = 0;
 
   // detect gaps in a burst due to drops
-  if (!_tddMode && data->inBurst && (data->tickCount != timeTicks)) {
+  if (data->inBurst && (data->tickCount != timeTicks)) {
     flags |= SOAPY_SDR_END_ABRUPT;
     SoapySDR::log(SOAPY_SDR_SSI, "D");
-    // std::cout << "\nDBG overflow " << data->packetCount << "\n\t"
-    //           << "expected: " << data->tickCount << ", but got " <<
-    //           timeTicks
-    //           << std::endl;
+    SoapySDR::logf(
+        SOAPY_SDR_WARNING,
+        "Gaps in burst data detected %lld expected %lld but got %lld", data->packetCount, data->tickCount, timeTicks);
   }
 
   // gather time even if its not valid
